@@ -1,0 +1,17 @@
+# Build outputs
+bin/
+obj/
+
+# Runtime logs
+logs/
+*.log
+
+# IDE and user-specific files
+.vs/
+.vscode/
+*.user
+*.suo
+
+# OS metadata
+Thumbs.db
+Desktop.ini
