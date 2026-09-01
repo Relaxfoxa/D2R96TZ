@@ -42,19 +42,22 @@ namespace D2R96TZ
 
         public Phase2DryRunResult Run()
         {
+            if (string.IsNullOrWhiteSpace(config.SearchKeyword)) return RunCurrentFilter();
             return RunInternal(config.SearchKeyword, config.SearchKeyword, null);
         }
 
         public Phase2DryRunResult RunCurrentFilter(ISet<string> excludedNames = null)
         {
             string currentKeyword = ui.ReadSearchKeyword();
-            if (string.IsNullOrWhiteSpace(currentKeyword)) currentKeyword = config.SearchKeyword;
-            return RunInternal(null, currentKeyword, excludedNames);
+            if (string.IsNullOrWhiteSpace(currentKeyword))
+                return RunInternal(null, string.Empty, excludedNames);
+            return RunInternal(null, currentKeyword.Trim(), excludedNames);
         }
 
         public Phase2DryRunResult RunFilter(string filterKeyword, ISet<string> excludedNames = null)
         {
-            if (string.IsNullOrWhiteSpace(filterKeyword)) throw new ArgumentException("filterKeyword 不能为空。", "filterKeyword");
+            if (string.IsNullOrWhiteSpace(filterKeyword))
+                return RunInternal(null, string.Empty, excludedNames);
             return RunInternal(null, filterKeyword.Trim(), excludedNames);
         }
 

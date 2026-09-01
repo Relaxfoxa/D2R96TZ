@@ -75,8 +75,13 @@ namespace D2R96TZ
                 MaximizeBox = false;
                 MinimizeBox = true;
                 ShowInTaskbar = true;
-                TopMost = false;
+                TopMost = true;
                 StartPosition = FormStartPosition.CenterScreen;
+                Shown += (sender, args) =>
+                {
+                    BringToFront();
+                    Activate();
+                };
 
                 var layout = new TableLayoutPanel
                 {

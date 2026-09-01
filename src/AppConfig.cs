@@ -33,7 +33,7 @@ namespace D2R96TZ
 
         private AppConfig()
         {
-            SearchKeyword = "96";
+            SearchKeyword = string.Empty;
             MaxGameAgeSec = 300;
             MinPlayers = 0;
             LobbyRefreshWaitMs = 100;

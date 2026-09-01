@@ -291,10 +291,11 @@ namespace D2R96TZ
             string currentKeyword = ui.ReadSearchKeyword();
             if (string.IsNullOrWhiteSpace(currentKeyword))
             {
-                TryJoinFirstVisibleResult();
-                return;
+                Log("manual_keyword_unreadable fallback=current_lobby_rows");
+                UpdateStatus("无法复制搜索词；按当前已显示列表筛选");
+                currentKeyword = string.Empty;
             }
-            currentKeyword = currentKeyword.Trim();
+            else currentKeyword = currentKeyword.Trim();
             var failedRooms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             while (!paused)
             {
@@ -316,7 +317,7 @@ namespace D2R96TZ
                 {
                     foreach (CandidateInspection inspection in dryRun.Inspections.Where(item => item.RejectReason != null).Take(5))
                         Log("manual_keyword_reject target={0} reason={1}", inspection.Snapshot.Name, inspection.RejectReason);
-                    Log("manual_keyword_no_recommendation excluded_failed={0}; type_new_keyword_then_press_F8", failedRooms.Count);
+                    Log("manual_keyword_no_recommendation excluded_failed={0}; current_lobby_rows_used={1}", failedRooms.Count, string.IsNullOrEmpty(currentKeyword));
                     UpdateStatus(DescribeNoRecommendation(dryRun, failedRooms.Count));
                     return;
                 }
@@ -361,58 +362,11 @@ namespace D2R96TZ
             }
         }
 
-        private void TryJoinFirstVisibleResult()
-        {
-            Log("manual_keyword_unreadable fallback=first_visible_result");
-            UpdateStatus("无法读取搜索词，复核第一个可见结果");
-            ui.RefreshCurrentSearch();
-            ui.SelectLobbyIndex(0, 1);
-            Thread.Sleep(config.LobbyRefreshWaitMs);
-
-            SelectedGameInfo selected = reader.ReadSelectedGame();
-            LobbyReadResult lobby = reader.ReadAllRooms(false);
-            string rejectReason = ValidateFirstVisibleSelection(selected, lobby.Rooms, config);
-            if (rejectReason != null)
-            {
-                Log("first_visible_reject target={0} reason={1}", selected.Name, rejectReason);
-                UpdateStatus("首个结果不可加入：" + rejectReason);
-                return;
-            }
-
-            Log("first_visible_join target={0} players={1} age={2}", selected.Name, selected.Players, selected.GameTimeSec);
-            UpdateStatus("正在加入：" + selected.Name);
-            string gameNameBeforeJoin = gameState.ReadCurrentGameName();
-            ui.ClickJoin();
-            if (!WaitForJoinedRoom(selected.Name, gameNameBeforeJoin))
-            {
-                if (paused) return;
-                Log("first_visible_join_failed target={0}", selected.Name);
-                UpdateStatus("加入失败：" + selected.Name);
-                ui.DismissJoinFailure();
-                return;
-            }
-
-            currentRoom = selected.Name;
-            waitingForManualKeyword = false;
-            BeginInvitationTracking("first_visible_auto_join");
-            Log("join_success current_room={0}; invitation_tracking=active", currentRoom);
-        }
-
-        internal static string ValidateFirstVisibleSelection(SelectedGameInfo selected, IEnumerable<RoomInfo> lobbyRooms, AppConfig config)
-        {
-            if (selected == null || string.IsNullOrWhiteSpace(selected.Name)) return "未选中房间";
-            if (!lobbyRooms.Any(room => string.Equals(room.Name, selected.Name, StringComparison.Ordinal))) return "选中详情不在当前大厅";
-            if (selected.Name.IndexOf(config.SearchKeyword, StringComparison.OrdinalIgnoreCase) < 0) return "房名不含 " + config.SearchKeyword;
-            if (selected.Players >= 8) return "房间已满";
-            if (selected.GameTimeSec < 0) return "房龄无效";
-            if (selected.GameTimeSec > config.MaxGameAgeSec) return "房龄超限";
-            return null;
-        }
-
         private static string DescribeNoRecommendation(Phase2DryRunResult dryRun, int excludedFailedCount)
         {
             if (dryRun.LobbyChanged) return "列表变化导致房名复核失败；请再按 F8";
-            if (dryRun.VisibleRoomsFound == 0) return "没有匹配房：" + dryRun.FilterKeyword;
+            if (dryRun.VisibleRoomsFound == 0)
+                return string.IsNullOrEmpty(dryRun.FilterKeyword) ? "当前已显示列表没有房间" : "没有匹配房：" + dryRun.FilterKeyword;
             CandidateInspection rejected = dryRun.Inspections.FirstOrDefault(item => item.RejectReason != null);
             if (rejected != null)
             {

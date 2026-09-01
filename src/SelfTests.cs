@@ -10,6 +10,8 @@ namespace D2R96TZ
     {
         public static void Run(AppConfig config)
         {
+            Assert(config.MaxGameAgeSec == 600, "configured room age limit is ten minutes");
+            config.OverrideSearchKeyword("96");
             var rooms = new List<RoomInfo>
             {
                 new RoomInfo { Name = "96TZ021", Players = 7, GameTimeSec = 42 },
@@ -38,6 +40,12 @@ namespace D2R96TZ
             Assert(filteredRows.Count == 3, "visible rows include every matching room");
             Assert(filteredRows[0].LobbyIndex == 1 && filteredRows[0].VisibleIndex == 0, "first filtered row maps raw index to visible index");
             Assert(filteredRows[2].LobbyIndex == 4 && filteredRows[2].VisibleIndex == 2, "filtered row mapping counts full matching rooms");
+            var customKeywordRows = Phase2DryRun.BuildVisibleRooms(new[]
+            {
+                new RoomInfo { LobbyIndex = 0, Name = "96固定词房", Players = 7 },
+                new RoomInfo { LobbyIndex = 1, Name = "杀巴尔001", Players = 6 }
+            }, "杀巴尔");
+            Assert(customKeywordRows.Count == 1 && customKeywordRows[0].Name == "杀巴尔001", "current search input is the only room-name filter");
             var failedRooms = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "96TZ021" };
             Assert(!Phase2DryRun.BuildInspectionOrder(rooms, config, failedRooms).Any(room => room.Name == "96TZ021"), "failed room is excluded from immediate rescan");
             var staleInspections = new List<CandidateInspection>
@@ -58,12 +66,6 @@ namespace D2R96TZ
             Assert(!Phase4ManualFollow.IsUnexpectedJoinedRoom("旧房001", "目标002", "旧房001"), "stale previous room name keeps waiting for join");
             Assert(!Phase4ManualFollow.IsUnexpectedJoinedRoom(string.Empty, "目标002", "旧房001"), "empty game name keeps waiting for join");
             Assert(Phase4ManualFollow.IsUnexpectedJoinedRoom("错误003", "目标002", "旧房001"), "a different new room is rejected");
-            var visibleSelected = new SelectedGameInfo { Name = "96随意0002", Players = 2, GameTimeSec = 81 };
-            var visibleLobby = new[] { new RoomInfo { Name = "96随意0002", Players = 1 } };
-            Assert(Phase4ManualFollow.ValidateFirstVisibleSelection(visibleSelected, visibleLobby, config) == null, "first visible matching room is eligible");
-            Assert(Phase4ManualFollow.ValidateFirstVisibleSelection(new SelectedGameInfo { Name = "其他房", Players = 2, GameTimeSec = 81 }, visibleLobby, config) == "选中详情不在当前大厅", "stale first visible selection is rejected");
-            Assert(Phase4ManualFollow.ValidateFirstVisibleSelection(new SelectedGameInfo { Name = "96随意0002", Players = 8, GameTimeSec = 81 }, visibleLobby, config) == "房间已满", "full first visible room is rejected");
-            Assert(Phase4ManualFollow.ValidateFirstVisibleSelection(new SelectedGameInfo { Name = "96随意0002", Players = 2, GameTimeSec = config.MaxGameAgeSec + 1 }, visibleLobby, config) == "房龄超限", "old first visible room is rejected");
             Assert(!Phase4ManualFollow.CanAdoptDetectedGame(false, false, "旧房001", null), "stale game name without roster is not adopted at initial startup");
             Assert(!Phase4ManualFollow.CanAdoptDetectedGame(false, true, "旧房001", "旧房001"), "unchanged stopped game name without roster is not adopted");
             Assert(Phase4ManualFollow.CanAdoptDetectedGame(false, true, "新房002", "旧房001"), "changed game name after stop is adopted for manual join");
