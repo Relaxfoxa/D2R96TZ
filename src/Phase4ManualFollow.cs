@@ -28,6 +28,8 @@ namespace D2R96TZ
         private bool waitingForManualKeyword;
         private bool trackingEnabled;
         private bool paused;
+        private bool stoppedStateCaptured;
+        private string gameNameAtStop;
         private readonly StatusWindow status = new StatusWindow();
 
         public Phase4ManualFollow(ProcessMemoryReader memory, AppConfig config)
@@ -56,7 +58,7 @@ namespace D2R96TZ
             status.Start();
             UpdateStatus(currentRoom.Length == 0 ? "等待 F8" : "检测到已在游戏；按 F8 监听邀请人");
             Log("phase4_ready current_room={0} mode={1}", currentRoom.Length == 0 ? "none" : currentRoom, currentRoom.Length == 0 ? "lobby_keyword_scan" : "existing_game_wait_F8");
-            Log("F8=大厅选房/已有游戏启动监听; 自动入房后无需F8; 跟踪已开启时F8忽略; F12=暂停监听动作");
+            Log("F8=大厅选房/重新检测当前游戏并启动监听; 自动入房后无需F8; 跟踪已开启时F8忽略; F12=停止并清空监听状态");
             bool f8WasDown = false;
             bool f12WasDown = false;
             try
@@ -64,7 +66,7 @@ namespace D2R96TZ
                 while (true)
                 {
                     bool f12Down = IsKeyDown(VkF12);
-                    if (f12Down && !f12WasDown) PauseMonitoring();
+                    if (f12Down && !f12WasDown) StopMonitoring();
                     f12WasDown = f12Down;
 
                     bool f8Down = IsKeyDown(VkF8);
@@ -72,7 +74,7 @@ namespace D2R96TZ
                     {
                         if (f8Down && !f8WasDown)
                         {
-                            ResumeMonitoring();
+                            RestartMonitoring();
                             HandleF8();
                         }
                         f8WasDown = f8Down;
@@ -120,21 +122,28 @@ namespace D2R96TZ
             else EnableTracking();
         }
 
-        private void PauseMonitoring()
+        private void StopMonitoring()
         {
             if (paused) return;
+            try { gameNameAtStop = gameState.ReadCurrentGameName(); }
+            catch (Exception) { gameNameAtStop = string.Empty; }
+            stoppedStateCaptured = true;
             paused = true;
+            currentRoom = string.Empty;
+            trackedOwner = null;
+            trackingEnabled = false;
+            waitingForManualKeyword = false;
             ownerMissingSinceUtc = DateTime.MinValue;
-            Log("monitoring_paused; F8_to_resume");
-            UpdateStatus("已暂停监听；按 F8 恢复");
+            Log("monitoring_stopped tracking_state_cleared game_name_at_stop={0}; F8_to_restart", string.IsNullOrEmpty(gameNameAtStop) ? "none" : gameNameAtStop);
+            UpdateStatus("已停止并清空；按 F8 重新检测当前状态");
         }
 
-        private void ResumeMonitoring()
+        private void RestartMonitoring()
         {
             paused = false;
             ownerMissingSinceUtc = DateTime.MinValue;
-            Log("monitoring_resumed");
-            UpdateStatus("监听已恢复");
+            Log("monitoring_restarted");
+            UpdateStatus("监听已重新启动，正在检测当前状态");
         }
 
         private void FollowNextRoom()
@@ -177,13 +186,23 @@ namespace D2R96TZ
 
         private bool TryAdoptCurrentGame()
         {
-            if (roster == null || roster.ReadPlayers().Count == 0) return false;
             string detectedRoom = gameState.ReadCurrentGameName();
             if (string.IsNullOrWhiteSpace(detectedRoom)) return false;
+            bool hasRoster = roster != null && roster.ReadPlayers().Count > 0;
+            if (!CanAdoptDetectedGame(hasRoster, stoppedStateCaptured, detectedRoom, gameNameAtStop)) return false;
             currentRoom = detectedRoom;
             waitingForManualKeyword = false;
+            stoppedStateCaptured = false;
+            gameNameAtStop = null;
             Log("existing_game_detected current_room={0}", currentRoom);
             return true;
+        }
+
+        internal static bool CanAdoptDetectedGame(bool hasRoster, bool hasStoppedState, string detectedRoom, string gameNameAtStop)
+        {
+            if (string.IsNullOrWhiteSpace(detectedRoom)) return false;
+            if (hasRoster) return true;
+            return hasStoppedState && !string.Equals(detectedRoom, gameNameAtStop, StringComparison.Ordinal);
         }
 
         private void BeginInvitationTracking(string source)
@@ -213,7 +232,8 @@ namespace D2R96TZ
                 }
                 else ui.RefreshCurrentSearch();
                 LobbyReadResult lobby = reader.ReadAllRooms(false);
-                RoomInfo target = lobby.Rooms.FirstOrDefault(room => string.Equals(room.Name, targetRoom, StringComparison.Ordinal));
+                List<RoomInfo> visibleRooms = Phase2DryRun.BuildVisibleRooms(lobby.Rooms, targetRoom);
+                RoomInfo target = visibleRooms.FirstOrDefault(room => string.Equals(room.Name, targetRoom, StringComparison.Ordinal));
                 if (target == null)
                 {
                     Log("next_room_not_found target={0}", targetRoom);
@@ -222,7 +242,7 @@ namespace D2R96TZ
                     continue;
                 }
 
-                ui.SelectLobbyIndex(target.LobbyIndex, lobby.Rooms.Count);
+                ui.SelectLobbyIndex(target.VisibleIndex, visibleRooms.Count);
                 SelectedGameInfo selected = WaitForSelectedGame(targetRoom);
                 if (!string.Equals(selected.Name, targetRoom, StringComparison.Ordinal))
                 {
@@ -245,8 +265,9 @@ namespace D2R96TZ
 
                 Log("next_room_found target={0} players={1} age={2}", targetRoom, selected.Players, selected.GameTimeSec);
                 UpdateStatus("找到目标，正在加入");
+                string gameNameBeforeJoin = gameState.ReadCurrentGameName();
                 ui.ClickJoin();
-                if (WaitForJoinedRoom(targetRoom))
+                if (WaitForJoinedRoom(targetRoom, gameNameBeforeJoin))
                 {
                     currentRoom = targetRoom;
                     Log("join_success current_room={0}", currentRoom);
@@ -267,6 +288,13 @@ namespace D2R96TZ
 
         private void JoinManualKeywordSelection()
         {
+            string currentKeyword = ui.ReadSearchKeyword();
+            if (string.IsNullOrWhiteSpace(currentKeyword))
+            {
+                TryJoinFirstVisibleResult();
+                return;
+            }
+            currentKeyword = currentKeyword.Trim();
             var failedRooms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             while (!paused)
             {
@@ -275,7 +303,7 @@ namespace D2R96TZ
                 Phase2DryRunResult dryRun = null;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    dryRun = new Phase2DryRun(memory, config).RunCurrentFilter(failedRooms);
+                    dryRun = new Phase2DryRun(memory, config).RunFilter(currentKeyword, failedRooms);
                     if (!dryRun.LobbyChanged || attempt == 3) break;
                     Log("manual_keyword_retry reason=selection_changed attempt={0}", attempt + 1);
                     Thread.Sleep(200);
@@ -289,12 +317,12 @@ namespace D2R96TZ
                     foreach (CandidateInspection inspection in dryRun.Inspections.Where(item => item.RejectReason != null).Take(5))
                         Log("manual_keyword_reject target={0} reason={1}", inspection.Snapshot.Name, inspection.RejectReason);
                     Log("manual_keyword_no_recommendation excluded_failed={0}; type_new_keyword_then_press_F8", failedRooms.Count);
-                    UpdateStatus(failedRooms.Count == 0 ? "没有可加入房，请检查关键词" : "重新筛选后暂无其他可加入房");
+                    UpdateStatus(DescribeNoRecommendation(dryRun, failedRooms.Count));
                     return;
                 }
 
                 RoomInfo recommended = dryRun.Recommended;
-                ui.SelectLobbyIndex(recommended.LobbyIndex, dryRun.RoomsFound);
+                ui.SelectLobbyIndex(recommended.VisibleIndex, dryRun.VisibleRoomsFound);
                 SelectedGameInfo selected = WaitForSelectedGame(recommended.Name);
                 if (paused) return;
                 if (!string.Equals(selected.Name, recommended.Name, StringComparison.Ordinal))
@@ -312,8 +340,9 @@ namespace D2R96TZ
 
                 Log("manual_keyword_join target={0} players={1} age={2}", selected.Name, selected.Players, selected.GameTimeSec);
                 UpdateStatus("正在加入：" + selected.Name);
+                string gameNameBeforeJoin = gameState.ReadCurrentGameName();
                 ui.ClickJoin();
-                if (!WaitForJoinedRoom(recommended.Name))
+                if (!WaitForJoinedRoom(recommended.Name, gameNameBeforeJoin))
                 {
                     if (paused) return;
                     failedRooms.Add(recommended.Name);
@@ -330,6 +359,69 @@ namespace D2R96TZ
                 Log("join_success current_room={0}; invitation_tracking=active", currentRoom);
                 return;
             }
+        }
+
+        private void TryJoinFirstVisibleResult()
+        {
+            Log("manual_keyword_unreadable fallback=first_visible_result");
+            UpdateStatus("无法读取搜索词，复核第一个可见结果");
+            ui.RefreshCurrentSearch();
+            ui.SelectLobbyIndex(0, 1);
+            Thread.Sleep(config.LobbyRefreshWaitMs);
+
+            SelectedGameInfo selected = reader.ReadSelectedGame();
+            LobbyReadResult lobby = reader.ReadAllRooms(false);
+            string rejectReason = ValidateFirstVisibleSelection(selected, lobby.Rooms, config);
+            if (rejectReason != null)
+            {
+                Log("first_visible_reject target={0} reason={1}", selected.Name, rejectReason);
+                UpdateStatus("首个结果不可加入：" + rejectReason);
+                return;
+            }
+
+            Log("first_visible_join target={0} players={1} age={2}", selected.Name, selected.Players, selected.GameTimeSec);
+            UpdateStatus("正在加入：" + selected.Name);
+            string gameNameBeforeJoin = gameState.ReadCurrentGameName();
+            ui.ClickJoin();
+            if (!WaitForJoinedRoom(selected.Name, gameNameBeforeJoin))
+            {
+                if (paused) return;
+                Log("first_visible_join_failed target={0}", selected.Name);
+                UpdateStatus("加入失败：" + selected.Name);
+                ui.DismissJoinFailure();
+                return;
+            }
+
+            currentRoom = selected.Name;
+            waitingForManualKeyword = false;
+            BeginInvitationTracking("first_visible_auto_join");
+            Log("join_success current_room={0}; invitation_tracking=active", currentRoom);
+        }
+
+        internal static string ValidateFirstVisibleSelection(SelectedGameInfo selected, IEnumerable<RoomInfo> lobbyRooms, AppConfig config)
+        {
+            if (selected == null || string.IsNullOrWhiteSpace(selected.Name)) return "未选中房间";
+            if (!lobbyRooms.Any(room => string.Equals(room.Name, selected.Name, StringComparison.Ordinal))) return "选中详情不在当前大厅";
+            if (selected.Name.IndexOf(config.SearchKeyword, StringComparison.OrdinalIgnoreCase) < 0) return "房名不含 " + config.SearchKeyword;
+            if (selected.Players >= 8) return "房间已满";
+            if (selected.GameTimeSec < 0) return "房龄无效";
+            if (selected.GameTimeSec > config.MaxGameAgeSec) return "房龄超限";
+            return null;
+        }
+
+        private static string DescribeNoRecommendation(Phase2DryRunResult dryRun, int excludedFailedCount)
+        {
+            if (dryRun.LobbyChanged) return "列表变化导致房名复核失败；请再按 F8";
+            if (dryRun.VisibleRoomsFound == 0) return "没有匹配房：" + dryRun.FilterKeyword;
+            CandidateInspection rejected = dryRun.Inspections.FirstOrDefault(item => item.RejectReason != null);
+            if (rejected != null)
+            {
+                if (rejected.RejectReason == "full") return "候选房已满：" + rejected.Snapshot.Name;
+                if (rejected.RejectReason == "too_old") return "候选房龄超限：" + rejected.Snapshot.Name;
+                if (rejected.RejectReason == "invalid_age") return "无法读取候选房龄：" + rejected.Snapshot.Name;
+                return "候选被拒绝：" + rejected.RejectReason;
+            }
+            return excludedFailedCount == 0 ? "匹配房均已满或不可用" : "重新筛选后暂无其他可加入房";
         }
 
         private void CheckTrackedOwner()
@@ -372,10 +464,10 @@ namespace D2R96TZ
 
         private void UpdateStatus(string action)
         {
-            string mode = paused ? "已暂停" : waitingForManualKeyword ? "等待手动关键词" :
+            string mode = paused ? "已停止" : waitingForManualKeyword ? "等待手动关键词" :
                 (currentRoom.Length == 0 ? "大厅关键词扫描" : (trackingEnabled ? "邀请/离房监听" : "已有游戏，待按 F8"));
             string trackingStatus;
-            if (paused) trackingStatus = "监听动作已暂停；按 F8 恢复";
+            if (paused) trackingStatus = "跟踪信息已清空；按 F8 重新检测当前状态";
             else if (!trackingEnabled) trackingStatus = currentRoom.Length == 0 ? "等待进入房间" : "按 F8 开始监听邀请人";
             else if (string.IsNullOrEmpty(trackedOwner)) trackingStatus = "等待真实邀请人发出邀请";
             else if (action == "跟踪玩家暂时消失，确认中") trackingStatus = "确认 " + trackedOwner + " 已离开";
@@ -399,7 +491,7 @@ namespace D2R96TZ
             return selected;
         }
 
-        private bool WaitForJoinedRoom(string expectedName)
+        private bool WaitForJoinedRoom(string expectedName, string gameNameBeforeJoin)
         {
             var stopwatch = Stopwatch.StartNew();
             while (stopwatch.ElapsedMilliseconds < config.JoinTimeoutMs)
@@ -408,9 +500,16 @@ namespace D2R96TZ
                 Thread.Sleep(200);
                 string current = gameState.ReadCurrentGameName();
                 if (string.Equals(current, expectedName, StringComparison.Ordinal)) return true;
-                if (current.Length > 0) return false;
+                if (IsUnexpectedJoinedRoom(current, expectedName, gameNameBeforeJoin)) return false;
             }
             return false;
+        }
+
+        internal static bool IsUnexpectedJoinedRoom(string currentName, string expectedName, string gameNameBeforeJoin)
+        {
+            if (string.IsNullOrEmpty(currentName)) return false;
+            if (string.Equals(currentName, expectedName, StringComparison.Ordinal)) return false;
+            return !string.Equals(currentName, gameNameBeforeJoin, StringComparison.Ordinal);
         }
 
         private void WaitRetryInterval()
@@ -422,7 +521,7 @@ namespace D2R96TZ
         private bool PauseRequested()
         {
             if (!IsKeyDown(VkF12)) return paused;
-            PauseMonitoring();
+            StopMonitoring();
             return true;
         }
 

@@ -104,7 +104,7 @@ namespace D2R96TZ
                 trackingValue = MakeValue("等待进入房间");
                 layout.Controls.Add(trackingValue, 1, 4);
                 layout.Controls.Add(MakeCaption("最近动作"), 0, 5);
-                actionValue = MakeValue("等待 F8；F12 停止");
+                actionValue = MakeValue("等待 F8；F12 停止并清空");
                 layout.Controls.Add(actionValue, 1, 5);
                 Controls.Add(layout);
             }

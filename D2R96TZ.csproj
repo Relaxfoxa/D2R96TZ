@@ -48,6 +48,7 @@
     <Compile Include="src\StatusWindow.cs" />
     <Compile Include="src\ProcessMemoryReader.cs" />
     <Compile Include="src\RoomLogic.cs" />
+    <Compile Include="src\RosterReader.cs" />
     <Compile Include="src\SelfTests.cs" />
     <Compile Include="src\Program.cs" />
   </ItemGroup>
@@ -56,4 +57,5 @@
     <None Include="AUDIT.md" />
     <None Include="README.md" />
   </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

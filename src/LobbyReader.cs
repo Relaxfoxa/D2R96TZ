@@ -9,6 +9,7 @@ namespace D2R96TZ
     public sealed class RoomInfo
     {
         public int LobbyIndex { get; set; }
+        public int VisibleIndex { get; set; }
         public string Name { get; set; }
         public int Players { get; set; }
         public int? GameTimeSec { get; set; }
@@ -88,6 +89,7 @@ namespace D2R96TZ
                 rooms.Add(new RoomInfo
                 {
                     LobbyIndex = index,
+                    VisibleIndex = index,
                     Name = name,
                     Players = players,
                     GameTimeSec = null

@@ -24,6 +24,7 @@ namespace D2R96TZ
         public long CandidateSortMs { get; set; }
         public bool LobbyChanged { get; set; }
         public string FilterKeyword { get; set; }
+        public int VisibleRoomsFound { get; set; }
     }
 
     public sealed class Phase2DryRun
@@ -51,6 +52,12 @@ namespace D2R96TZ
             return RunInternal(null, currentKeyword, excludedNames);
         }
 
+        public Phase2DryRunResult RunFilter(string filterKeyword, ISet<string> excludedNames = null)
+        {
+            if (string.IsNullOrWhiteSpace(filterKeyword)) throw new ArgumentException("filterKeyword 不能为空。", "filterKeyword");
+            return RunInternal(null, filterKeyword.Trim(), excludedNames);
+        }
+
         private Phase2DryRunResult RunInternal(string uiSearchKeyword, string filterKeyword, ISet<string> excludedNames)
         {
             var refreshWatch = Stopwatch.StartNew();
@@ -59,7 +66,8 @@ namespace D2R96TZ
             LobbyReadResult lobby = reader.ReadAllRooms(false);
             refreshWatch.Stop();
 
-            var inspectionOrder = BuildInspectionOrder(lobby.Rooms, config, filterKeyword, excludedNames);
+            var visibleRooms = BuildVisibleRooms(lobby.Rooms, filterKeyword);
+            var inspectionOrder = BuildInspectionOrderFromVisible(visibleRooms, config, excludedNames);
             var inspections = new List<CandidateInspection>();
             var selectedWatch = Stopwatch.StartNew();
             var playerGroups = inspectionOrder.GroupBy(room => room.Players).OrderByDescending(group => group.Key).ToList();
@@ -69,7 +77,7 @@ namespace D2R96TZ
                 foreach (RoomInfo snapshot in playerGroup)
                 {
                     var inspection = new CandidateInspection { Snapshot = snapshot };
-                    ui.SelectLobbyIndex(snapshot.LobbyIndex, lobby.Rooms.Count);
+                    ui.SelectLobbyIndex(snapshot.VisibleIndex, visibleRooms.Count);
                     SelectedGameInfo selected = WaitForSelectedGame(snapshot.Name);
                     if (!string.Equals(selected.Name, snapshot.Name, StringComparison.Ordinal))
                     {
@@ -80,6 +88,7 @@ namespace D2R96TZ
                         inspection.Current = new RoomInfo
                         {
                             LobbyIndex = snapshot.LobbyIndex,
+                            VisibleIndex = snapshot.VisibleIndex,
                             Name = selected.Name,
                             Players = selected.Players,
                             GameTimeSec = selected.GameTimeSec
@@ -116,7 +125,8 @@ namespace D2R96TZ
                 SelectedInfoMs = selectedWatch.ElapsedMilliseconds,
                 CandidateSortMs = sortWatch.ElapsedMilliseconds,
                 LobbyChanged = lobbyChanged,
-                FilterKeyword = filterKeyword
+                FilterKeyword = filterKeyword,
+                VisibleRoomsFound = visibleRooms.Count
             };
         }
 
@@ -132,18 +142,39 @@ namespace D2R96TZ
 
         private static List<RoomInfo> BuildInspectionOrder(IEnumerable<RoomInfo> rooms, AppConfig config, string searchKeyword, ISet<string> excludedNames)
         {
-            var query = rooms
+            return BuildInspectionOrderFromVisible(BuildVisibleRooms(rooms, searchKeyword), config, excludedNames);
+        }
+
+        internal static List<RoomInfo> BuildVisibleRooms(IEnumerable<RoomInfo> rooms, string searchKeyword)
+        {
+            var visible = rooms
+                .Where(room => room.LobbyIndex >= 0)
+                .GroupBy(room => room.Name, StringComparer.Ordinal)
+                .Select(group => group.OrderBy(room => room.LobbyIndex).First())
+                .OrderBy(room => room.LobbyIndex)
+                .Where(room => string.IsNullOrEmpty(searchKeyword) || room.Name.IndexOf(searchKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                .Select(room => new RoomInfo
+                {
+                    LobbyIndex = room.LobbyIndex,
+                    Name = room.Name,
+                    Players = room.Players,
+                    GameTimeSec = room.GameTimeSec
+                })
+                .ToList();
+            for (int index = 0; index < visible.Count; index++) visible[index].VisibleIndex = index;
+            return visible;
+        }
+
+        private static List<RoomInfo> BuildInspectionOrderFromVisible(IEnumerable<RoomInfo> visibleRooms, AppConfig config, ISet<string> excludedNames)
+        {
+            return visibleRooms
                 .Where(room => room.Players >= config.MinPlayers)
                 .Where(room => room.Players < 8)
                 .Where(room => room.LobbyIndex >= 0 && room.LobbyIndex < config.AllGamesMaxRecords)
                 .Where(room => excludedNames == null || !excludedNames.Contains(room.Name))
-                .GroupBy(room => room.Name, StringComparer.Ordinal)
-                .Select(group => group.OrderBy(room => room.LobbyIndex).First())
                 .OrderByDescending(room => room.Players)
                 .ThenBy(room => room.LobbyIndex)
                 .ToList();
-            if (string.IsNullOrEmpty(searchKeyword)) return query;
-            return query.Where(room => room.Name.IndexOf(searchKeyword, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
         }
 
         public static RoomInfo SelectRecommendation(IEnumerable<CandidateInspection> inspections, AppConfig config)
