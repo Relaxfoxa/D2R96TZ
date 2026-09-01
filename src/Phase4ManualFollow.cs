@@ -281,8 +281,13 @@ namespace D2R96TZ
             }
             Log("next_room_timeout target={0}; current_room_unchanged={1}", targetRoom, currentRoom);
             ui.ClearSearchBox();
+            currentRoom = string.Empty;
+            trackedOwner = null;
+            trackingEnabled = false;
+            ownerMissingSinceUtc = DateTime.MinValue;
             waitingForManualKeyword = true;
-            UpdateStatus("追房超时：已清空搜索框；输入新关键词后按 F8");
+            Log("next_room_timeout_state_cleared target={0}; previous_room_state_released", targetRoom);
+            UpdateStatus("追房超时：已清空房间和跟踪状态；输入新关键词后按 F8");
             Log("manual_keyword_required type_keyword_then_press_F8");
         }
 

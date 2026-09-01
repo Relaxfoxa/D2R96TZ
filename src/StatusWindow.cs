@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -50,11 +51,21 @@ namespace D2R96TZ
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 form = new StatusForm();
+                form.Show();
+                form.BringToFront();
+                form.Activate();
                 started.Set();
                 Application.Run(form);
             }
-            catch
+            catch (Exception ex)
             {
+                try
+                {
+                    string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+                    Directory.CreateDirectory(logDirectory);
+                    File.AppendAllText(Path.Combine(logDirectory, "status-window-error.log"), DateTime.Now.ToString("O") + Environment.NewLine + ex + Environment.NewLine);
+                }
+                catch { }
                 started.Set();
             }
         }
